@@ -133,9 +133,6 @@ func GetStatus(c *gin.Context) {
 	if cs.ApiInfoEnabled {
 		data["api_info"] = console_setting.GetApiInfo()
 	}
-	if cs.AnnouncementsEnabled {
-		data["announcements"] = console_setting.GetAnnouncements()
-	}
 	if cs.FAQEnabled {
 		data["faq"] = console_setting.GetFAQ()
 	}
@@ -180,7 +177,23 @@ func GetNotice(c *gin.Context) {
 	common.OptionMapRWMutex.RLock()
 	notice := common.OptionMap["Notice"]
 	common.OptionMapRWMutex.RUnlock()
-	serveRevalidatedJSON(c, notice)
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    notice,
+	})
+}
+
+func GetAnnouncements(c *gin.Context) {
+	announcements := []map[string]any{}
+	if console_setting.GetConsoleSetting().AnnouncementsEnabled {
+		announcements = console_setting.GetAnnouncements()
+	}
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "",
+		"data":    announcements,
+	})
 }
 
 func GetAbout(c *gin.Context) {

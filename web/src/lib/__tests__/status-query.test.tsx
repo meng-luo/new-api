@@ -29,6 +29,7 @@ import {
 } from '@/lib/nav-modules'
 import {
   STATUS_QUERY_KEY,
+  readCachedStatus,
   ensureStatus,
   statusQueryOptions,
 } from '@/lib/status-query'
@@ -262,4 +263,18 @@ describe('module guard status freshness', () => {
       })
     }
   )
+})
+
+test('legacy status snapshots discard timeline content while retaining public configuration', () => {
+  window.localStorage.setItem(
+    'status',
+    JSON.stringify({
+      system_name: 'public',
+      announcements: [{ content: 'Private timeline update' }],
+    })
+  )
+  expect(readCachedStatus()).toEqual({ system_name: 'public' })
+  expect(JSON.parse(window.localStorage.getItem('status') ?? '{}')).toEqual({
+    system_name: 'public',
+  })
 })

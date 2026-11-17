@@ -19,9 +19,11 @@ For commercial licensing, please contact support@quantumnous.com
 import { useQuery } from '@tanstack/react-query'
 import { useState, useMemo } from 'react'
 
-import { useStatus } from '@/hooks/use-status'
+import { useAnnouncements } from '@/features/dashboard/hooks/use-status-data'
+import type { AnnouncementItem } from '@/features/dashboard/types'
 import { getNotice } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
+import { useAuthStore } from '@/stores/auth-store'
 import { useNotificationStore } from '@/stores/notification-store'
 
 function hashString(input: string): string {
@@ -41,7 +43,9 @@ function hashString(input: string): string {
  * Generate a unique key for an announcement
  * Prefer backend id, fall back to a content hash so edits register
  */
-function getAnnouncementKey(item: Record<string, unknown>): string {
+function getAnnouncementKey(
+  item: AnnouncementItem & { title?: string; link?: string }
+): string {
   if (!item) return ''
 
   if (item.id !== undefined && item.id !== null) {
@@ -64,6 +68,8 @@ function getAnnouncementKey(item: Record<string, unknown>): string {
  * Provides unread counts and read status management
  */
 export function useNotifications() {
+  const userId = useAuthStore((state) => state.auth.user?.id)
+  const sessionId = useAuthStore((state) => state.auth.session?.sid)
   const [popoverOpen, setPopoverOpen] = useState(false)
   const [activeTab, setActiveTab] = useState<'notice' | 'announcements'>(
     'notice'
@@ -75,21 +81,15 @@ export function useNotifications() {
     isLoading: noticeLoading,
     refetch: refetchNotice,
   } = useQuery({
-    queryKey: ['notice'],
-    queryFn: async () => requireServerSuccess(await getNotice()),
+    queryKey: ['notice', userId, sessionId],
+    queryFn: async ({ signal }) =>
+      requireServerSuccess(await getNotice(signal)),
+    enabled: Boolean(userId),
     staleTime: 1000 * 60 * 5, // 5 minutes
   })
 
-  // Fetch Announcements from status
-  const { status, loading: statusLoading } = useStatus()
-  const announcementsEnabled = status?.announcements_enabled ?? false
-  const announcements = useMemo<Record<string, unknown>[]>(() => {
-    if (!announcementsEnabled) return []
-    return ((status?.announcements || []) as Record<string, unknown>[]).slice(
-      0,
-      20
-    )
-  }, [announcementsEnabled, status?.announcements])
+  const { items, loading: announcementsLoading } = useAnnouncements()
+  const announcements = useMemo(() => items.slice(0, 20), [items])
 
   // Notification store
   const {
@@ -100,21 +100,18 @@ export function useNotifications() {
   } = useNotificationStore()
 
   // Extract notice content
-  const noticeContent = noticeResponse?.success
-    ? (noticeResponse.data || '').trim()
-    : ''
+  const noticeContent =
+    userId && noticeResponse?.success ? (noticeResponse.data || '').trim() : ''
 
   // Calculate unread counts
   const unreadCounts = useMemo(() => {
     const noticeUnread =
       noticeContent && noticeContent !== lastReadNotice ? 1 : 0
 
-    const announcementsUnread = announcements.filter(
-      (item: Record<string, unknown>) => {
-        const key = getAnnouncementKey(item)
-        return !isAnnouncementRead(key)
-      }
-    ).length
+    const announcementsUnread = announcements.filter((item) => {
+      const key = getAnnouncementKey(item)
+      return !isAnnouncementRead(key)
+    }).length
 
     return {
       notice: noticeUnread,
@@ -125,15 +122,14 @@ export function useNotifications() {
 
   const markAnnouncementsAsRead = () => {
     if (announcements.length > 0) {
-      const allKeys = announcements.map((item: Record<string, unknown>) =>
-        getAnnouncementKey(item)
-      )
+      const allKeys = announcements.map((item) => getAnnouncementKey(item))
       markAnnouncementsRead(allKeys)
     }
   }
 
   // Handle popover open
   const handleOpenPopover = (tab?: 'notice' | 'announcements') => {
+    if (!userId) return
     const nextTab = tab || activeTab
 
     // Mark currently visible content as read when opening the notification center
@@ -170,7 +166,7 @@ export function useNotifications() {
     // Data
     notice: noticeContent,
     announcements,
-    loading: noticeLoading || statusLoading,
+    loading: Boolean(userId) && (noticeLoading || announcementsLoading),
 
     // Unread counts
     unreadCount: unreadCounts.total,
@@ -178,7 +174,7 @@ export function useNotifications() {
     unreadAnnouncementsCount: unreadCounts.announcements,
 
     // Popover state
-    popoverOpen,
+    popoverOpen: Boolean(userId) && popoverOpen,
     setPopoverOpen: handlePopoverOpenChange,
     activeTab,
     setActiveTab: handleTabChange,
@@ -186,6 +182,8 @@ export function useNotifications() {
     // Actions
     openPopover: handleOpenPopover,
     closePopover: () => setPopoverOpen(false),
-    refetchNotice,
+    refetchNotice: () => {
+      if (userId) return refetchNotice()
+    },
   }
 }

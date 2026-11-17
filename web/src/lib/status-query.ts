@@ -108,7 +108,14 @@ export function readCachedStatus(): StatusData | null {
   try {
     if (typeof window === 'undefined') return null
     const raw = window.localStorage.getItem(STATUS_STORAGE_KEY)
-    return raw ? (JSON.parse(raw) as StatusData) : null
+    if (!raw) return null
+    const status = JSON.parse(raw) as StatusData
+    // Remove timeline content cached by versions that exposed it publicly.
+    if ('announcements' in status) {
+      delete status.announcements
+      window.localStorage.setItem(STATUS_STORAGE_KEY, JSON.stringify(status))
+    }
+    return status
   } catch {
     return null
   }

@@ -16,6 +16,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 
 For commercial licensing, please contact support@quantumnous.com
 */
+import type { AnnouncementItem } from '@/features/dashboard/types'
 import { api } from '@/lib/http-client'
 import { authRequestOptions, authResult } from '@/lib/secure-verification'
 import { requireServerSuccess } from '@/lib/server-error-message'
@@ -75,19 +76,21 @@ export async function getStatus() {
   return requireServerSuccess(res.data)?.data as Record<string, unknown>
 }
 
-export async function getNotice(): Promise<{
+export async function getNotice(signal?: AbortSignal): Promise<{
   success: boolean
   message?: string
   data?: string
 }> {
-  // Drop the client's global `Cache-Control: no-store` for this public,
-  // non-user-specific payload. `no-store` forbids the browser from keeping a
-  // copy at all, so it would never hold an ETag to revalidate with and the
-  // server could never answer 304. The server sends `no-cache`, so the browser
-  // still revalidates on every request and an admin edit shows up immediately.
-  const res = await api.get('/api/notice', {
-    headers: { 'Cache-Control': null },
-  })
+  const res = await api.get('/api/notice', { signal })
+  return res.data
+}
+
+export async function getAnnouncements(signal?: AbortSignal): Promise<{
+  success: boolean
+  message?: string
+  data?: AnnouncementItem[]
+}> {
+  const res = await api.get('/api/announcements', { signal })
   return res.data
 }
 

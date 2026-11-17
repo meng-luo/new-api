@@ -20,8 +20,8 @@ import { api } from '@/lib/api'
 
 import type { LegalDocumentResponse } from './types'
 
-// Both documents drop the client's global `Cache-Control: no-store` for the
-// same reason as getNotice in @/lib/api: `no-store` stops the browser from
+// Both public documents drop the client's global `Cache-Control: no-store`.
+// That directive stops the browser from
 // keeping a copy, so it would never hold an ETag to revalidate with and the
 // server could never answer 304. These are the largest payloads in this family
 // and are re-fetched on every sign-up, so the saving is the most visible here.

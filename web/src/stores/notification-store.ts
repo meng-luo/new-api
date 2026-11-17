@@ -20,7 +20,7 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 interface NotificationState {
-  // Last read Notice content signature (full trimmed message)
+  // Last read Notice content, kept only in memory
   lastReadNotice: string
   // Array of read announcement keys (id or content hash)
   readAnnouncementKeys: string[]
@@ -78,8 +78,10 @@ export const useNotificationStore = create<NotificationState>()(
     }),
     {
       name: 'notification-storage',
+      version: 1,
+      // Discard legacy snapshots that persisted the full private notice.
+      migrate: () => ({ readAnnouncementKeys: [], closedUntilDate: null }),
       partialize: (state) => ({
-        lastReadNotice: state.lastReadNotice,
         readAnnouncementKeys: state.readAnnouncementKeys,
         closedUntilDate: state.closedUntilDate,
       }),

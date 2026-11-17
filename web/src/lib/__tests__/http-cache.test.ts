@@ -64,7 +64,7 @@ it('a retry after 404 revalidates HTTP caches instead of accepting a stored erro
   }
 })
 
-it('public notices keep their existing ETag revalidation policy', async () => {
+it('authenticated notices prevent browser cache storage', async () => {
   const adapter = vi.fn<AxiosAdapter>(async (config) => ({
     data: { success: true },
     status: 200,
@@ -74,5 +74,7 @@ it('public notices keep their existing ETag revalidation policy', async () => {
   }))
   api.defaults.adapter = adapter
   await getNotice()
-  expect(adapter.mock.calls[0][0].headers.get('Cache-Control')).toBeNull()
+  expect(adapter.mock.calls[0][0].headers.get('Cache-Control')).toContain(
+    'no-store'
+  )
 })

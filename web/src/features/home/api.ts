@@ -29,7 +29,7 @@ import type { HomePageContentResponse } from './types'
  * Returns Markdown/HTML content or iframe URL
  */
 export async function getHomePageContent(): Promise<HomePageContentResponse> {
-  // See getNotice in @/lib/api: the global `Cache-Control: no-store` is dropped
+  // Public content drops the global `Cache-Control: no-store` header
   // so the browser can hold an ETag and revalidate, letting the server answer
   // 304. Server-side `no-cache` keeps admin edits immediate.
   const res = await api.get('/api/home_page_content', {

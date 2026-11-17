@@ -4,18 +4,25 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/QuantumNous/new-api/common"
 	"github.com/QuantumNous/new-api/middleware"
+	"github.com/QuantumNous/new-api/model"
 	"github.com/QuantumNous/new-api/service"
 	"github.com/QuantumNous/new-api/service/authz"
+	"github.com/QuantumNous/new-api/setting/console_setting"
 	"github.com/gin-gonic/gin"
+	"github.com/glebarez/sqlite"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"gorm.io/gorm"
 )
 
 // accessTokenExemptRoutes are /api routes that never reach dashboard
@@ -26,7 +33,6 @@ var accessTokenExemptRoutes = []string{
 	"POST /api/setup",
 	"GET /api/status",
 	"GET /api/uptime/status",
-	"GET /api/notice",
 	"GET /api/user-agreement",
 	"GET /api/privacy-policy",
 	"GET /api/about",
@@ -198,5 +204,113 @@ func TestAccessTokenVerificationScopesAreAllListed(t *testing.T) {
 	for _, scope := range scopes {
 		_, listed := service.AccessTokenVerificationScope(scope)
 		assert.True(t, listed, "verification scope %s has no access token rule", scope)
+	}
+}
+
+func TestNotificationsRequireLoginSession(t *testing.T) {
+	previousDB, previousRedis := model.DB, common.RedisEnabled
+	previousOptions := common.OptionMap
+	settings := console_setting.GetConsoleSetting()
+	previousSettings := *settings
+	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
+	require.NoError(t, err)
+	sqlDB, err := db.DB()
+	require.NoError(t, err)
+	require.NoError(t, db.AutoMigrate(&model.User{}, &model.UserSession{}))
+	model.DB = db
+	common.RedisEnabled = false
+	common.OptionMap = map[string]string{"Notice": "Private system notice"}
+	settings.AnnouncementsEnabled = true
+	settings.Announcements = `[{"id":1,"content":"Private timeline update"}]`
+	t.Cleanup(func() {
+		model.DB, common.RedisEnabled = previousDB, previousRedis
+		common.OptionMap = previousOptions
+		*settings = previousSettings
+		require.NoError(t, sqlDB.Close())
+	})
+	user := model.User{Username: "notification-reader", Role: common.RoleCommonUser, Status: common.UserStatusEnabled, Group: "default", AuthVersion: 1}
+	require.NoError(t, db.Create(&user).Error)
+	engine := newAccessTokenScopeTestEngine(t)
+
+	t.Run("public status never includes private content", func(t *testing.T) {
+		response := httptest.NewRecorder()
+		engine.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/status", nil))
+		require.Equal(t, http.StatusOK, response.Code)
+		var payload struct {
+			Data map[string]any `json:"data"`
+		}
+		require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+		assert.NotContains(t, payload.Data, "announcements")
+		assert.NotContains(t, response.Body.String(), "Private")
+		assert.Equal(t, true, payload.Data["announcements_enabled"])
+	})
+
+	for _, state := range []string{"anonymous", "valid", "expired", "revoked", "tampered"} {
+		t.Run(state, func(t *testing.T) {
+			token := ""
+			if state != "anonymous" {
+				session := model.UserSession{SID: "notifications-" + state, UserID: user.Id, Version: 1, UserAuthVersion: 1, Status: model.UserSessionStatusActive, ExpiresAt: time.Now().Unix() + 3600}
+				if state == "expired" {
+					session.ExpiresAt = time.Now().Unix() - 1
+				}
+				if state == "revoked" {
+					session.Status = model.UserSessionStatusRevoked
+					session.RevokedAt = time.Now().Unix()
+				}
+				require.NoError(t, db.Create(&session).Error)
+				token, _, err = service.IssueAccessToken(service.AuthIdentity{UserID: user.Id, SessionID: session.SID, UserAuthVersion: 1, SessionVersion: 1})
+				require.NoError(t, err)
+				if state == "tampered" {
+					token += "invalid"
+				}
+			}
+			for _, path := range []string{"/api/notice", "/api/announcements"} {
+				t.Run(path, func(t *testing.T) {
+					request := httptest.NewRequest(http.MethodGet, path, nil)
+					request.Header.Set("If-None-Match", common.ETagFor("public-content:v1", "Private system notice"))
+					if token != "" {
+						request.Header.Set("Authorization", "Bearer "+token)
+					}
+					response := httptest.NewRecorder()
+					engine.ServeHTTP(response, request)
+					assert.Contains(t, response.Header().Get("Cache-Control"), "no-store")
+					assert.Empty(t, response.Header().Get("ETag"))
+					var payload struct {
+						Success bool `json:"success"`
+						Data    any  `json:"data"`
+					}
+					require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+					if state != "valid" {
+						assert.Equal(t, http.StatusUnauthorized, response.Code)
+						assert.False(t, payload.Success)
+						assert.Nil(t, payload.Data)
+						assert.NotContains(t, response.Body.String(), "Private")
+						return
+					}
+					require.Equal(t, http.StatusOK, response.Code)
+					assert.True(t, payload.Success)
+					if path == "/api/notice" {
+						assert.Equal(t, "Private system notice", payload.Data)
+					} else {
+						assert.Equal(t, []any{map[string]any{"id": float64(1), "content": "Private timeline update"}}, payload.Data)
+					}
+				})
+			}
+			if state == "valid" {
+				settings.AnnouncementsEnabled = false
+				request := httptest.NewRequest(http.MethodGet, "/api/announcements", nil)
+				request.Header.Set("Authorization", "Bearer "+token)
+				response := httptest.NewRecorder()
+				engine.ServeHTTP(response, request)
+				require.Equal(t, http.StatusOK, response.Code)
+				var payload struct {
+					Data []any `json:"data"`
+				}
+				require.NoError(t, common.Unmarshal(response.Body.Bytes(), &payload))
+				assert.Empty(t, payload.Data)
+				assert.NotContains(t, response.Body.String(), "Private timeline update")
+				settings.AnnouncementsEnabled = true
+			}
+		})
 	}
 }
