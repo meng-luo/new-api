@@ -90,7 +90,7 @@ export function PublicHeader(props: PublicHeaderProps) {
     logoLoaded,
   } = useSystemConfig()
   const dynamicLinks = useTopNavLinks()
-  const notifications = useNotifications()
+  const notifications = useNotifications({ autoOpen: showNotifications })
   const routerState = useRouterState()
   const pathname = routerState.location.pathname
 

@@ -17,7 +17,7 @@ along with this program. If not, see <https://www.gnu.org/licenses/>.
 For commercial licensing, please contact support@quantumnous.com
 */
 import { useQuery } from '@tanstack/react-query'
-import { useState, useMemo } from 'react'
+import { useEffect, useEffectEvent, useMemo, useRef, useState } from 'react'
 
 import { useAnnouncements } from '@/features/dashboard/hooks/use-status-data'
 import type { AnnouncementItem } from '@/features/dashboard/types'
@@ -67,10 +67,12 @@ function getAnnouncementKey(
  * Hook to manage notifications (Notice + Announcements)
  * Provides unread counts and read status management
  */
-export function useNotifications() {
+export function useNotifications({ autoOpen = true } = {}) {
   const userId = useAuthStore((state) => state.auth.user?.id)
   const sessionId = useAuthStore((state) => state.auth.session?.sid)
-  const [popoverOpen, setPopoverOpen] = useState(false)
+  const sessionKey = userId ? `${userId}:${sessionId ?? ''}` : null
+  const openedForSession = useRef<string | null>(null)
+  const [openSession, setOpenSession] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'notice' | 'announcements'>(
     'notice'
   )
@@ -96,7 +98,7 @@ export function useNotifications() {
     lastReadNotice,
     markNoticeRead,
     markAnnouncementsRead,
-    isAnnouncementRead,
+    readAnnouncementKeys,
   } = useNotificationStore()
 
   // Extract notice content
@@ -110,7 +112,7 @@ export function useNotifications() {
 
     const announcementsUnread = announcements.filter((item) => {
       const key = getAnnouncementKey(item)
-      return !isAnnouncementRead(key)
+      return !readAnnouncementKeys.includes(key)
     }).length
 
     return {
@@ -118,7 +120,7 @@ export function useNotifications() {
       announcements: announcementsUnread,
       total: noticeUnread + announcementsUnread,
     }
-  }, [noticeContent, lastReadNotice, announcements, isAnnouncementRead])
+  }, [noticeContent, lastReadNotice, announcements, readAnnouncementKeys])
 
   const markAnnouncementsAsRead = () => {
     if (announcements.length > 0) {
@@ -130,10 +132,11 @@ export function useNotifications() {
   // Handle popover open
   const handleOpenPopover = (tab?: 'notice' | 'announcements') => {
     if (!userId) return
+    openedForSession.current = sessionKey
     const nextTab = tab || activeTab
 
     // Mark currently visible content as read when opening the notification center
-    if (noticeContent) {
+    if (nextTab === 'notice' && noticeContent) {
       markNoticeRead(noticeContent)
     }
     if (nextTab === 'announcements') {
@@ -141,7 +144,7 @@ export function useNotifications() {
     }
 
     setActiveTab(nextTab)
-    setPopoverOpen(true)
+    setOpenSession(sessionKey)
   }
 
   const handlePopoverOpenChange = (open: boolean) => {
@@ -150,23 +153,49 @@ export function useNotifications() {
       return
     }
 
-    setPopoverOpen(false)
+    setOpenSession(null)
   }
 
-  // Handle tab change - mark announcements as read when switching to that tab
+  // Mark only the tab being viewed as read.
   const handleTabChange = (tab: 'notice' | 'announcements') => {
     setActiveTab(tab)
 
+    if (tab === 'notice' && noticeContent) {
+      markNoticeRead(noticeContent)
+    }
     if (tab === 'announcements') {
       markAnnouncementsAsRead()
     }
   }
 
+  const loading = Boolean(userId) && (noticeLoading || announcementsLoading)
+  const openUnreadNotifications = useEffectEvent(() => {
+    handleOpenPopover(unreadCounts.notice > 0 ? 'notice' : 'announcements')
+  })
+
+  useEffect(() => {
+    if (!sessionKey) {
+      openedForSession.current = null
+      setOpenSession(null)
+      return
+    }
+    if (
+      !autoOpen ||
+      loading ||
+      unreadCounts.total === 0 ||
+      openedForSession.current === sessionKey
+    ) {
+      return
+    }
+
+    openUnreadNotifications()
+  }, [autoOpen, loading, sessionKey, unreadCounts.total])
+
   return {
     // Data
     notice: noticeContent,
     announcements,
-    loading: Boolean(userId) && (noticeLoading || announcementsLoading),
+    loading,
 
     // Unread counts
     unreadCount: unreadCounts.total,
@@ -174,14 +203,14 @@ export function useNotifications() {
     unreadAnnouncementsCount: unreadCounts.announcements,
 
     // Popover state
-    popoverOpen: Boolean(userId) && popoverOpen,
+    popoverOpen: Boolean(userId) && openSession === sessionKey,
     setPopoverOpen: handlePopoverOpenChange,
     activeTab,
     setActiveTab: handleTabChange,
 
     // Actions
     openPopover: handleOpenPopover,
-    closePopover: () => setPopoverOpen(false),
+    closePopover: () => setOpenSession(null),
     refetchNotice: () => {
       if (userId) return refetchNotice()
     },

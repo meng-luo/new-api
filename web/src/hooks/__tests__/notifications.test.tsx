@@ -126,7 +126,6 @@ test('signing in loads both tabs and signing out immediately hides the open noti
   act(() =>
     useAuthStore.getState().auth.setUser({ id: 1, username: 'reader', role: 1 })
   )
-  await user.click(await screen.findByRole('button', { name: 'Notifications' }))
   expect(await screen.findByText('Private system notice')).toBeVisible()
   await user.click(screen.getByRole('tab', { name: 'Timeline' }))
   expect(await screen.findByText(announcement.content)).toBeVisible()
@@ -210,4 +209,106 @@ test('changing accounts cannot reuse the previous account notification cache', a
   expect(hook.result.current.notice).toBe('')
   expect(hook.result.current.announcements).toEqual([])
   await waitFor(() => expect(hook.result.current.loading).toBe(false))
+})
+
+test('only unread timeline entries automatically open the timeline and clear its unread count', async () => {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'reader', role: 1 })
+  useNotificationStore.getState().markNoticeRead('Private system notice')
+  render(<Notifications />, { wrapper: Wrapper })
+
+  expect(await screen.findByText(announcement.content)).toBeVisible()
+  expect(screen.getByRole('tab', { name: 'Timeline' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+  expect(
+    screen.getByRole('button', { name: 'Notifications' })
+  ).not.toHaveTextContent(/\d/)
+})
+
+test('closing the automatically opened notice leaves unread timeline entries without reopening', async () => {
+  const user = userEvent.setup()
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'reader', role: 1 })
+  const view = render(<Notifications />, { wrapper: Wrapper })
+  expect(await screen.findByText('Private system notice')).toBeVisible()
+  expect(screen.getByRole('tab', { name: 'Notice' })).toHaveAttribute(
+    'aria-selected',
+    'true'
+  )
+  await user.click(screen.getByRole('button', { name: /^Close$/ }))
+  view.rerender(<Notifications />)
+
+  expect(screen.getByRole('button', { name: 'Notifications' })).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  )
+  expect(
+    screen.getByRole('button', { name: 'Notifications' })
+  ).toHaveTextContent('1')
+})
+
+test('already read content stays closed and can still be opened manually', async () => {
+  const user = userEvent.setup()
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'reader', role: 1 })
+  useNotificationStore.getState().markNoticeRead('Private system notice')
+  useNotificationStore.getState().markAnnouncementsRead(['id:1'])
+  const hook = renderHook(() => useNotifications(), { wrapper: Wrapper })
+  await waitFor(() => expect(hook.result.current.loading).toBe(false))
+  render(<Notifications />, { wrapper: Wrapper })
+  expect(screen.getByRole('button', { name: 'Notifications' })).toHaveAttribute(
+    'aria-expanded',
+    'false'
+  )
+  await user.click(screen.getByRole('button', { name: 'Notifications' }))
+  expect(await screen.findByText('Private system notice')).toBeVisible()
+})
+
+test('automatic opening waits for both requests before choosing the unread notice', async () => {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'reader', role: 1 })
+  let resolveNotice!: (value: {
+    data: { success: boolean; data: string }
+  }) => void
+  const noticeResponse = new Promise<{
+    data: { success: boolean; data: string }
+  }>((resolve) => {
+    resolveNotice = resolve
+  })
+  vi.mocked(api.get).mockImplementation(async (url) => {
+    if (url === '/api/notice') return noticeResponse
+    return { data: { success: true, data: [announcement] } }
+  })
+  const hook = renderHook(() => useNotifications(), { wrapper: Wrapper })
+  await waitFor(() =>
+    expect(hook.result.current.announcements).toEqual([announcement])
+  )
+  expect(hook.result.current.popoverOpen).toBe(false)
+  await act(async () =>
+    resolveNotice({ data: { success: true, data: 'Private system notice' } })
+  )
+  await waitFor(() => expect(hook.result.current.popoverOpen).toBe(true))
+  expect(hook.result.current.activeTab).toBe('notice')
+  expect(hook.result.current.unreadNoticeCount).toBe(0)
+  expect(hook.result.current.unreadAnnouncementsCount).toBe(1)
+})
+
+test('a hidden notification center does not automatically open or mark unread content as read', async () => {
+  useAuthStore.getState().auth.setUser({ id: 1, username: 'reader', role: 1 })
+  const hook = renderHook(() => useNotifications({ autoOpen: false }), {
+    wrapper: Wrapper,
+  })
+  await waitFor(() => expect(hook.result.current.loading).toBe(false))
+  expect(hook.result.current.popoverOpen).toBe(false)
+  expect(hook.result.current.unreadCount).toBe(2)
+})
+
+test('signing out closes an automatically opened panel before the same user signs in again', async () => {
+  const reader = { id: 1, username: 'reader', role: 1 }
+  useAuthStore.getState().auth.setUser(reader)
+  const hook = renderHook(() => useNotifications(), { wrapper: Wrapper })
+  await waitFor(() => expect(hook.result.current.popoverOpen).toBe(true))
+  act(() => hook.result.current.setActiveTab('announcements'))
+  expect(hook.result.current.unreadCount).toBe(0)
+  act(() => useAuthStore.getState().auth.reset())
+  act(() => useAuthStore.getState().auth.setUser(reader))
+  expect(hook.result.current.popoverOpen).toBe(false)
 })
