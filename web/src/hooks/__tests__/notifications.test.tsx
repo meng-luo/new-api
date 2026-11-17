@@ -70,7 +70,7 @@ beforeEach(() => {
   vi.spyOn(window, 'scrollTo').mockImplementation(() => {})
   useAuthStore.getState().auth.reset()
   useNotificationStore.setState({
-    lastReadNotice: '',
+    lastReadNoticeKey: '',
     readAnnouncementKeys: [],
   })
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -180,7 +180,7 @@ test('legacy notification storage discards persisted notice content on hydration
     })
   )
   await useNotificationStore.persist.rehydrate()
-  expect(useNotificationStore.getState().lastReadNotice).toBe('')
+  expect(useNotificationStore.getState().lastReadNoticeKey).toBe('')
   expect(window.localStorage.getItem('notification-storage')).not.toContain(
     'Private system notice'
   )
@@ -312,3 +312,52 @@ test('signing out closes an automatically opened panel before the same user sign
   act(() => useAuthStore.getState().auth.setUser(reader))
   expect(hook.result.current.popoverOpen).toBe(false)
 })
+
+test.each([
+  { name: 'unchanged', suffix: 'first version', opens: false },
+  { name: 'updated', suffix: 'second version', opens: true },
+])(
+  '$name notice keeps the correct read state after a page reload',
+  async ({ suffix, opens }) => {
+    const prefix = 'Private announcement content '.repeat(8)
+    const originalNotice = `${prefix}first version`
+    useAuthStore.getState().auth.setUser({ id: 1, username: 'reader', role: 1 })
+    useNotificationStore.getState().markAnnouncementsRead(['id:1'])
+    vi.mocked(api.get).mockImplementation(async (url) => {
+      if (url === '/api/notice') {
+        return { data: { success: true, data: originalNotice } }
+      }
+      return { data: { success: true, data: [announcement] } }
+    })
+    const firstPage = renderHook(() => useNotifications(), { wrapper: Wrapper })
+    await waitFor(() => expect(firstPage.result.current.popoverOpen).toBe(true))
+    act(() => firstPage.result.current.closePopover())
+    firstPage.unmount()
+    const persisted = window.localStorage.getItem('notification-storage') ?? ''
+    expect(persisted).not.toContain(originalNotice)
+
+    // Recreate the in-memory state and restore only what survives a reload.
+    useNotificationStore.setState(useNotificationStore.getInitialState(), true)
+    window.localStorage.setItem('notification-storage', persisted)
+    await useNotificationStore.persist.rehydrate()
+    client.removeQueries({ queryKey: ['notice'] })
+    client.removeQueries({ queryKey: ['announcements'] })
+    vi.mocked(api.get).mockImplementation(async (url) => {
+      if (url === '/api/notice') {
+        return { data: { success: true, data: `  ${prefix}${suffix}  ` } }
+      }
+      return { data: { success: true, data: [announcement] } }
+    })
+    const refreshedPage = renderHook(() => useNotifications(), {
+      wrapper: Wrapper,
+    })
+    await waitFor(() =>
+      expect(refreshedPage.result.current.loading).toBe(false)
+    )
+    expect(refreshedPage.result.current.popoverOpen).toBe(opens)
+    expect(refreshedPage.result.current.unreadCount).toBe(0)
+    expect(window.localStorage.getItem('notification-storage')).not.toContain(
+      prefix
+    )
+  }
+)

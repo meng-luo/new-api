@@ -20,8 +20,8 @@ import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 
 interface NotificationState {
-  // Last read Notice content, kept only in memory
-  lastReadNotice: string
+  // Persist only the fingerprint of the last read notice, never its content.
+  lastReadNoticeKey: string
   // Array of read announcement keys (id or content hash)
   readAnnouncementKeys: string[]
   // Timestamp of last "Close Today" action
@@ -35,6 +35,19 @@ interface NotificationState {
   isNoticeClosed: () => boolean
 }
 
+export function getNoticeReadKey(content: string): string {
+  const normalizedContent = content.trim()
+  if (!normalizedContent) return ''
+
+  // FNV-1a provides a stable 64-bit change marker without storing the text.
+  let hash = 0xcbf29ce484222325n
+  for (let i = 0; i < normalizedContent.length; i += 1) {
+    hash ^= BigInt(normalizedContent.charCodeAt(i))
+    hash = BigInt.asUintN(64, hash * 0x100000001b3n)
+  }
+  return `notice:${hash.toString(16)}`
+}
+
 /**
  * Notification store for tracking read status of Notice and Announcements
  * Persists to localStorage to maintain state across sessions
@@ -42,14 +55,12 @@ interface NotificationState {
 export const useNotificationStore = create<NotificationState>()(
   persist(
     (set, get) => ({
-      lastReadNotice: '',
+      lastReadNoticeKey: '',
       readAnnouncementKeys: [],
       closedUntilDate: null,
 
       markNoticeRead: (noticeContent: string) => {
-        // Persist the full trimmed content so edits beyond 100 chars register
-        const normalizedContent = noticeContent.trim()
-        set({ lastReadNotice: normalizedContent })
+        set({ lastReadNoticeKey: getNoticeReadKey(noticeContent) })
       },
 
       markAnnouncementsRead: (keys: string[]) => {
@@ -80,8 +91,16 @@ export const useNotificationStore = create<NotificationState>()(
       name: 'notification-storage',
       version: 1,
       // Discard legacy snapshots that persisted the full private notice.
-      migrate: () => ({ readAnnouncementKeys: [], closedUntilDate: null }),
+      migrate: (): Pick<
+        NotificationState,
+        'lastReadNoticeKey' | 'readAnnouncementKeys' | 'closedUntilDate'
+      > => ({
+        lastReadNoticeKey: '',
+        readAnnouncementKeys: [],
+        closedUntilDate: null,
+      }),
       partialize: (state) => ({
+        lastReadNoticeKey: state.lastReadNoticeKey,
         readAnnouncementKeys: state.readAnnouncementKeys,
         closedUntilDate: state.closedUntilDate,
       }),

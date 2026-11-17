@@ -24,7 +24,10 @@ import type { AnnouncementItem } from '@/features/dashboard/types'
 import { getNotice } from '@/lib/api'
 import { requireServerSuccess } from '@/lib/server-error-message'
 import { useAuthStore } from '@/stores/auth-store'
-import { useNotificationStore } from '@/stores/notification-store'
+import {
+  getNoticeReadKey,
+  useNotificationStore,
+} from '@/stores/notification-store'
 
 function hashString(input: string): string {
   let hash = 0
@@ -95,7 +98,7 @@ export function useNotifications({ autoOpen = true } = {}) {
 
   // Notification store
   const {
-    lastReadNotice,
+    lastReadNoticeKey,
     markNoticeRead,
     markAnnouncementsRead,
     readAnnouncementKeys,
@@ -104,11 +107,15 @@ export function useNotifications({ autoOpen = true } = {}) {
   // Extract notice content
   const noticeContent =
     userId && noticeResponse?.success ? (noticeResponse.data || '').trim() : ''
+  const noticeReadKey = useMemo(
+    () => getNoticeReadKey(noticeContent),
+    [noticeContent]
+  )
 
   // Calculate unread counts
   const unreadCounts = useMemo(() => {
     const noticeUnread =
-      noticeContent && noticeContent !== lastReadNotice ? 1 : 0
+      noticeReadKey && noticeReadKey !== lastReadNoticeKey ? 1 : 0
 
     const announcementsUnread = announcements.filter((item) => {
       const key = getAnnouncementKey(item)
@@ -120,7 +127,7 @@ export function useNotifications({ autoOpen = true } = {}) {
       announcements: announcementsUnread,
       total: noticeUnread + announcementsUnread,
     }
-  }, [noticeContent, lastReadNotice, announcements, readAnnouncementKeys])
+  }, [noticeReadKey, lastReadNoticeKey, announcements, readAnnouncementKeys])
 
   const markAnnouncementsAsRead = () => {
     if (announcements.length > 0) {
